@@ -21,7 +21,17 @@ def setup_database():
     cur = conn.cursor()
     
     try:
-        # Conversations table
+        # Users table (username = conversation key for all user data)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Conversations table (conversation_id stores username for per-user data)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id SERIAL PRIMARY KEY,
@@ -546,6 +556,50 @@ def get_scheduled_posts_by_conversation(conversation_id: str):
         conn.close()
 
 
+def get_due_scheduled_posts():
+    """Get scheduled posts that are due (scheduled_time <= now) and still in 'scheduled' status."""
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("""
+            SELECT sp.id, sp.content_id, sp.conversation_id, sp.caption, sp.scheduled_time,
+                   gc.generated_image_url
+            FROM scheduled_posts sp
+            JOIN generated_content gc ON sp.content_id = gc.id
+            WHERE sp.status = 'scheduled'
+              AND sp.scheduled_time <= %s
+            ORDER BY sp.scheduled_time ASC
+        """, (datetime.utcnow(),))
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error getting due scheduled posts: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_scheduled_post_after_publish(scheduled_post_id: int, success: bool, post_url: str = None, error_message: str = None):
+    """Update a scheduled post after publish attempt (status posted/failed, posted_at, post_url, error_message)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        status = 'posted' if success else 'failed'
+        cur.execute("""
+            UPDATE scheduled_posts
+            SET status = %s, posted_at = %s, post_url = %s, error_message = %s, updated_at = %s
+            WHERE id = %s
+        """, (status, datetime.now() if success else None, post_url, error_message, datetime.now(), scheduled_post_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating scheduled post {scheduled_post_id}: {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+
 def save_conversation_x_account(conversation_id: str, x_username: str, x_user_id: str = None):
     """Link an X (Twitter) account to a conversation (upsert: one per conversation)."""
     conn = get_connection()
@@ -588,6 +642,50 @@ def get_conversation_x_account(conversation_id: str):
         return dict(row) if row else None
     except Exception as e:
         print(f"Error getting conversation X account: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+# --- User auth (username = key for all user data; conversation_id in DB = username) ---
+
+def create_user(username: str, password_hash: str):
+    """Create a new user. Returns user id or None on conflict."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO users (username, password_hash)
+            VALUES (%s, %s)
+            ON CONFLICT (username) DO NOTHING
+            RETURNING id
+        """, (username.strip().lower(), password_hash))
+        conn.commit()
+        row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating user: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_user_by_username(username: str):
+    """Get user by username (case-insensitive). Returns dict with id, username, password_hash or None."""
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT id, username, password_hash FROM users WHERE LOWER(username) = LOWER(%s)",
+            (username.strip(),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"Error getting user: {e}")
         return None
     finally:
         cur.close()

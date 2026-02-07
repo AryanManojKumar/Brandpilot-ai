@@ -2,6 +2,10 @@
 
 import { useState, useEffect } from "react";
 import Image from "next/image";
+import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface Brand {
   id: number;
@@ -17,25 +21,26 @@ interface Brand {
 }
 
 interface ContentCreatorDashboardProps {
-  conversationId: string;
+  username: string;
 }
 
 export default function ContentCreatorDashboard({
-  conversationId,
+  username,
 }: ContentCreatorDashboardProps) {
+  const { authHeader } = useAuth();
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchBrands();
-  }, [conversationId]);
+  }, [username]);
 
   const fetchBrands = async () => {
     try {
-      const response = await fetch(
-        `http://localhost:8000/brands/conversation/${conversationId}`
-      );
+      const response = await fetch(`${API_BASE}/brands/me`, {
+        headers: authHeader(),
+      });
       const data = await response.json();
       setBrands(data.brands || []);
     } catch (error) {
@@ -57,7 +62,6 @@ export default function ContentCreatorDashboard({
     return (
       <BrandContentCreator
         brand={selectedBrand}
-        conversationId={conversationId}
         onBack={() => setSelectedBrand(null)}
       />
     );
@@ -131,15 +135,14 @@ export default function ContentCreatorDashboard({
 
 interface BrandContentCreatorProps {
   brand: Brand;
-  conversationId: string;
   onBack: () => void;
 }
 
 function BrandContentCreator({
   brand,
-  conversationId,
   onBack,
 }: BrandContentCreatorProps) {
+  const { authHeader } = useAuth();
   const [productImage, setProductImage] = useState<File | null>(null);
   const [productImagePreview, setProductImagePreview] = useState<string>("");
   const [generating, setGenerating] = useState(false);
@@ -160,7 +163,7 @@ function BrandContentCreator({
 
   const handleGenerateContent = async () => {
     if (!productImage) {
-      alert("Please upload a product image first");
+      toast.warning("Please upload a product image first");
       return;
     }
 
@@ -169,23 +172,30 @@ function BrandContentCreator({
     try {
       const formData = new FormData();
       formData.append("brand_id", brand.id.toString());
-      formData.append("conversation_id", conversationId);
       formData.append("product_image", productImage);
 
-      const response = await fetch("http://localhost:8000/generate-ugc", {
+      const response = await fetch(`${API_BASE}/generate-ugc`, {
         method: "POST",
+        headers: authHeader(),
         body: formData,
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
-      if (data.success) {
+      if (response.ok && data.success) {
         setGeneratedImage(data.generated_image_url);
         setPrompt(data.prompt);
+        toast.success("Content generated!");
+      } else {
+        const message = typeof data.detail === "string" ? data.detail : "Failed to generate content";
+        toast.error(response.status === 402 ? "Payment required" : "Failed to generate content", {
+          description: message,
+          duration: 8000,
+        });
       }
     } catch (error) {
       console.error("Error generating content:", error);
-      alert("Failed to generate content");
+      toast.error("Failed to generate content");
     } finally {
       setGenerating(false);
     }

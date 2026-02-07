@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,11 @@ from dotenv import load_dotenv
 import uvicorn
 import json
 import re
-from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation, save_conversation_x_account, get_conversation_x_account
+import jwt
+import bcrypt
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.background import BackgroundScheduler
+from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation, get_due_scheduled_posts, update_scheduled_post_after_publish, save_conversation_x_account, get_conversation_x_account, create_user, get_user_by_username
 from image_generator import generate_marketing_prompt, generate_ugc_image_nano_banana, upload_to_tmpfiles
 from twitter_utils import generate_caption_with_ai, post_to_twitter
 from fastapi import UploadFile, File, Form
@@ -20,7 +25,37 @@ from pathlib import Path
 
 load_dotenv()
 
-app = FastAPI(title="IIT Gandhinagar Social Media Agent API")
+scheduler = BackgroundScheduler()
+
+
+def process_due_scheduled_posts():
+    """Run by scheduler: post any due scheduled posts to X and update DB."""
+    due = get_due_scheduled_posts()
+    if not due:
+        return
+    for row in due:
+        post_id = row["id"]
+        image_url = row.get("generated_image_url")
+        caption = (row.get("caption") or "").strip() or "Check this out!"
+        if not image_url:
+            update_scheduled_post_after_publish(post_id, False, error_message="Missing image URL")
+            continue
+        result = post_to_twitter(image_url, caption)
+        if result.get("success"):
+            update_scheduled_post_after_publish(post_id, True, post_url=result.get("post_url"))
+        else:
+            update_scheduled_post_after_publish(post_id, False, error_message=result.get("message", "Unknown error"))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(process_due_scheduled_posts, "interval", minutes=1, id="scheduled_posts")
+    scheduler.start()
+    yield
+    scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="IIT Gandhinagar Social Media Agent API", lifespan=lifespan)
 
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads/products")
@@ -38,6 +73,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth: JWT and password hashing (bcrypt directly to avoid passlib/bcrypt version issues)
+JWT_SECRET = os.getenv("JWT_SECRET", "brandpilot-secret-change-in-production")
+JWT_ALGORITHM = "HS256"
+security = HTTPBearer(auto_error=False)
+
+
+def _password_bytes(password: str) -> bytes:
+    """Bcrypt only supports passwords up to 72 bytes."""
+    raw = (password or "").encode("utf-8")
+    return raw[:72] if len(raw) > 72 else raw
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(_password_bytes(password), password_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def get_current_username(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Extract username from JWT. Raises 401 if missing or invalid."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        username = payload.get("username")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return username
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
 # Configure LLM - Using Kie.ai API (Gemini 2.5 Flash via OpenAI-compatible endpoint)
 llm = LLM(
     model="openai/gemini-2.5-flash",
@@ -49,30 +120,27 @@ llm = LLM(
 brandfetch_tool_instance = BrandfetchTool(api_key=os.getenv("BRANDFETCH_API_KEY"))
 brandfetch_tool = brandfetch_tool_instance.get_tool()
 
-# Create the agent
+# Create the agent (GOJO - Router/Orchestrator)
 brand_researcher = Agent(
-    role="Brand Research Specialist and Platform Orchestrator",
-    goal="Welcome users to BrandSync platform, analyze their brand, and guide them to specialized agents",
-    backstory="""You are the friendly orchestrator of IIT Gandhinagar Social Media Agent - an AI-powered content automation platform.
-    
-    YOUR PLATFORM:
-    IIT Gandhinagar Social Media Agent helps businesses automate their marketing content creation and social media management through 2 specialized AI agents:
-    1. Brand Research Agent (YOU) - Analyzes brand identity, colors, vibe, target audience
-    2. Content Creator Agent - Generates videos, graphics, and captions aligned with brand
-    
-    YOUR ROLE:
-    - Welcome users warmly and explain what IIT Gandhinagar Social Media Agent does
-    - Ask for their website URL to perform BrandSync
-    - Use Brandfetch tool ONLY when you have a clear website domain/ticker/ISIN/crypto symbol
-    - Analyze the brand data to determine: product/service, company vibe, target audience, industry
-    - After successful BrandSync, inform them their brand is stored in the database
-    - Introduce them to the Content Creator agent
-    
-    CONVERSATION STYLE:
-    - Be friendly, professional, and enthusiastic
-    - For greetings, respond naturally and explain the platform
-    - Only use Brandfetch when you have a specific identifier
-    - After brand analysis, celebrate the completion and guide next steps
+    role="GOJO - Router and Platform Orchestrator",
+    goal="Get the user's website URL for brand fetch, then guide them only to features we have implemented",
+    backstory="""You are GOJO, the friendly router/orchestrator of IIT Gandhinagar Social Media Agent. You guide users through the platform without inventing features or giving step-by-step solutions.
+
+    YOUR PRIMARY TASK:
+    - Get the user's website URL (or domain/ticker/ISIN/crypto symbol) so we can run the brand fetch tool and save their brand to the database.
+    - Use the Brandfetch tool ONLY when you have a clear website domain/ticker/ISIN/crypto symbol.
+    - Do not talk about features or steps we have not implemented. Only mention what exists on the platform.
+
+    WHAT WE HAVE IMPLEMENTED (only say these):
+    1. Brand fetch: You collect their website URL and run brand analysis; the brand is saved to the database.
+    2. Content Creation Dashboard: Where users find all their fetched brand information and can create content. Do NOT explain how to create content step-by-step; tell them to go to the Content Creation Dashboard.
+    3. Social Media Manager: Where users can find all created assets and X (Twitter) account analytics—only when their X account is connected.
+
+    STRICT RULES (avoid hallucinations):
+    - For any content-related query (how to create content, how to make posts, what to post, etc.): Do NOT give solutions or tutorials. Tell them to go to the Content Creation Dashboard—all their fetched brand info is there and they can create content there.
+    - When relevant, mention the Social Media Manager: created assets and X analytics (if X is connected).
+    - Never describe tools, workflows, or features that are not listed above.
+    - Be friendly, professional, and short. Redirect to the right place; do not teach how to do things.
     """,
     tools=[brandfetch_tool],
     llm=llm,
@@ -88,9 +156,59 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
-    conversation_id: str
+    conversation_id: str  # same as username
     brand_synced: bool = False
     brand_id: int | None = None
+
+
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/auth/signup")
+async def signup(req: AuthRequest):
+    """Register a new user. Creates user and a conversation keyed by username."""
+    username = (req.username or "").strip()
+    password = req.password or ""
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="Username too short")
+    user = get_user_by_username(username)
+    if user:
+        raise HTTPException(status_code=400, detail="Username already taken")
+    password_hash = _hash_password(password)
+    user_id = create_user(username, password_hash)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Username already taken")
+    create_conversation(username)
+    canonical = username.strip().lower()
+    token = jwt.encode(
+        {"username": canonical, "sub": str(user_id)},
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    return {"token": token, "username": canonical}
+
+
+@app.post("/auth/login")
+async def login(req: AuthRequest):
+    """Login and return JWT."""
+    username = (req.username or "").strip()
+    password = req.password or ""
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+    user = get_user_by_username(username)
+    if not user or not _verify_password(password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    canonical = user["username"]
+    token = jwt.encode(
+        {"username": canonical, "sub": str(user["id"])},
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    return {"token": token, "username": canonical}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -197,12 +315,10 @@ def parse_brand_data_from_response(agent_response: str, raw_brandfetch_data: str
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, username: str = Depends(get_current_username)):
     try:
-        # Generate conversation ID if not provided
-        conversation_id = request.conversation_id or f"conv_{os.urandom(8).hex()}"
-        
-        # Create conversation in DB
+        # Use authenticated username as conversation key
+        conversation_id = username
         create_conversation(conversation_id)
         
         # Save user message
@@ -212,16 +328,13 @@ async def chat(request: ChatRequest):
             description=f"""
             User message: {request.message}
             
-            Context: You are the orchestrator of IIT Gandhinagar Social Media Agent platform - an AI-powered content automation system.
+            Context: You are GOJO, the router/orchestrator. Your main job is to get the website URL for the brand fetch tool. Only talk about what we have implemented. Do not give step-by-step solutions for creating or posting content—redirect to the right dashboard instead.
             
-            Instructions based on user message:
+            Instructions:
             
-            1. IF greeting/general question (hello, hi, what is this, what can you do):
-               - Welcome them to IIT Gandhinagar Social Media Agent
-               - Explain: "IIT Gandhinagar Social Media Agent automates your marketing content creation. We have 2 AI agents:
-                 • Brand Research Agent (me) - Analyzes your brand identity
-                 • Content Creator Agent - Generates videos, graphics, and captions"
-               - Ask for their website URL to start BrandSync
+            1. IF greeting or general question (hello, hi, what is this, what can you do):
+               - Welcome them briefly to IIT Gandhinagar Social Media Agent
+               - Ask for their website URL so we can run brand fetch and save their brand
                - DO NOT use any tools
             
             2. IF they provide a website/domain/ticker (nike.com, AAPL, etc):
@@ -230,21 +343,29 @@ async def chat(request: ChatRequest):
                  **Brand Name:** [name]
                  **Logo URL:** [primary logo URL]
                  **Product/Service:** [what they offer]
-                 **Company Vibe:** [analyze colors/fonts/description - e.g., "Modern & Innovative"]
+                 **Company Vibe:** [analyze colors/fonts/description]
                  **Target Audience:** [infer from positioning]
                  **Industry:** [sector]
                  **Brand Colors:** [list with hex codes]
                  **Social Media:** [links if available]
-               - After analysis, say: "✅ BrandSync Complete! Your brand profile has been saved to our database."
-               - Then introduce next steps: "Now you can use our Content Creator Agent to generate brand-consistent content!"
+               - Say: "✅ BrandSync Complete! Your brand profile has been saved to our database."
+               - Then: Tell them to go to the Content Creation Dashboard to see their fetched brand info and create content. Optionally mention the Social Media Manager for created assets and X analytics (when X is connected).
             
-            3. IF asking about brand but no identifier:
+            3. IF they ask about brand but did not give a URL/identifier:
                - Politely ask for website URL, stock ticker, ISIN, or crypto symbol
             
-            Be conversational, enthusiastic, and helpful!
+            4. IF content-related (how to create content, how to post, what to post, make a post, create graphics/videos, etc):
+               - Do NOT give tutorials or step-by-step solutions
+               - Tell them: Go to the Content Creation Dashboard—all your fetched brand information is there and you can create content there
+               - Optionally add: In the Social Media Manager you can find all created assets and X account analytics (if your X account is connected)
+            
+            5. IF they ask about posting, scheduling, or assets:
+               - Tell them: Go to the Social Media Manager to see your created assets and X analytics (when X is connected). Do not explain how to post step-by-step.
+            
+            Only mention features we have: brand fetch (you), Content Creation Dashboard, Social Media Manager. Be brief and redirect; do not hallucinate features or give how-to solutions.
             """,
             agent=brand_researcher,
-            expected_output="Welcoming response, brand analysis with insights, or guidance to next steps."
+            expected_output="Brief response: either asking for website URL, brand analysis after fetch, or redirecting user to Content Creation Dashboard or Social Media Manager without giving step-by-step solutions."
         )
         
         crew = Crew(
@@ -296,10 +417,19 @@ async def chat(request: ChatRequest):
             brand_id=brand_id
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         print(f"❌ Error in chat endpoint: {error_details}")
+        err_msg = str(e).lower()
+        # LLM provider down/maintenance (e.g. Kie.ai 500 "server is being maintained")
+        if "maintained" in err_msg or "internal server error" in err_msg or "invalid response object" in err_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="The AI service is temporarily unavailable. Please try again in a few minutes.",
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -313,9 +443,21 @@ async def get_brands():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/brands/me")
+async def get_my_brands(username: str = Depends(get_current_username)):
+    """Get all brands for the authenticated user (username = conversation key)."""
+    try:
+        brands = get_brands_by_conversation(username)
+        return {"brands": brands, "username": username}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/brands/conversation/{conversation_id}")
-async def get_conversation_brands(conversation_id: str):
-    """Get all brands for a specific conversation"""
+async def get_conversation_brands(conversation_id: str, username: str = Depends(get_current_username)):
+    """Get all brands for a conversation; only allowed for own username."""
+    if conversation_id != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         brands = get_brands_by_conversation(conversation_id)
         return {"brands": brands, "conversation_id": conversation_id}
@@ -378,8 +520,8 @@ async def get_brand_details(brand_id: int):
 @app.post("/generate-ugc")
 async def generate_ugc_content(
     brand_id: int = Form(...),
-    conversation_id: str = Form(...),
-    product_image: UploadFile = File(...)
+    product_image: UploadFile = File(...),
+    username: str = Depends(get_current_username),
 ):
     """Generate UGC marketing image for a brand"""
     try:
@@ -438,10 +580,10 @@ async def generate_ugc_content(
         generated_image_url = result['image_url']
         prompt = result['prompt']
         
-        # Save to database
+        # Save to database (username = conversation key)
         content_id = save_generated_content(
             brand_id=brand_id,
-            conversation_id=conversation_id,
+            conversation_id=username,
             product_image_url=product_image_url,
             generated_image_url=generated_image_url,
             prompt_used=prompt
@@ -476,9 +618,21 @@ async def get_brand_generated_content(brand_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/generated-content/me")
+async def get_my_generated_content(username: str = Depends(get_current_username)):
+    """Get all generated content for the authenticated user."""
+    try:
+        content = get_generated_content_by_conversation(username)
+        return {"content": content, "username": username}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/generated-content/conversation/{conversation_id}")
-async def get_conversation_generated_content(conversation_id: str):
-    """Get all generated content for a conversation"""
+async def get_conversation_generated_content(conversation_id: str, username: str = Depends(get_current_username)):
+    """Get all generated content for a conversation; only allowed for own username."""
+    if conversation_id != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         content = get_generated_content_by_conversation(conversation_id)
         return {"content": content, "conversation_id": conversation_id}
@@ -525,8 +679,8 @@ async def generate_caption(
 
 
 @app.get("/twitter/connect")
-async def twitter_connect(conversation_id: str = None):
-    """Verify X (Twitter) connection and optionally link it to a conversation for persistence."""
+async def twitter_connect(username: str = Depends(get_current_username)):
+    """Verify X (Twitter) connection and link it to the authenticated user."""
     import tweepy
 
     api_key = os.getenv("TWITTER_API_KEY")
@@ -546,17 +700,16 @@ async def twitter_connect(conversation_id: str = None):
         )
         api = tweepy.API(auth)
         user = api.verify_credentials()
-        username = user.screen_name
+        x_username = user.screen_name
         name = getattr(user, "name", user.screen_name)
         x_user_id = str(user.id) if getattr(user, "id", None) else None
 
-        if conversation_id and conversation_id.strip():
-            create_conversation(conversation_id.strip())
-            save_conversation_x_account(conversation_id.strip(), username, x_user_id)
+        create_conversation(username)
+        save_conversation_x_account(username, x_username, x_user_id)
 
         return {
             "success": True,
-            "username": username,
+            "username": x_username,
             "name": name,
         }
     except Exception as e:
@@ -567,12 +720,10 @@ async def twitter_connect(conversation_id: str = None):
 
 
 @app.get("/twitter/connection")
-async def twitter_connection(conversation_id: str):
-    """Return the X account linked to this conversation (if any) so the frontend can restore state."""
-    if not conversation_id or not conversation_id.strip():
-        return {"connected": False}
+async def twitter_connection(username: str = Depends(get_current_username)):
+    """Return the X account linked to the authenticated user (if any)."""
     try:
-        row = get_conversation_x_account(conversation_id.strip())
+        row = get_conversation_x_account(username)
         if not row or not row.get("x_username"):
             return {"connected": False}
         return {
@@ -668,23 +819,65 @@ async def twitter_user_tweets(user_id: str):
         raise HTTPException(status_code=502, detail=f"TweetAPI error: {str(e)}")
 
 
+@app.post("/post-now")
+async def post_now(
+    content_id: int = Form(...),
+    caption: str = Form(...),
+    username: str = Depends(get_current_username),
+):
+    """Post immediately to X (Twitter) with the given content and caption."""
+    try:
+        from database import get_connection
+        from psycopg2.extras import RealDictCursor
+
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT gc.id, gc.generated_image_url
+            FROM generated_content gc
+            WHERE gc.id = %s AND gc.conversation_id = %s
+            """,
+            (content_id, username),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Content not found or access denied")
+        image_url = row.get("generated_image_url")
+        if not image_url:
+            raise HTTPException(status_code=400, detail="Content has no image URL")
+        result = post_to_twitter(image_url, (caption or "").strip() or "Check this out!")
+        if not result.get("success"):
+            raise HTTPException(status_code=502, detail=result.get("message", "Post failed"))
+        return {
+            "success": True,
+            "post_url": result.get("post_url"),
+            "message": result.get("message", "Posted successfully"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Error in post-now: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/schedule-post")
 async def schedule_post(
     content_id: int = Form(...),
-    conversation_id: str = Form(...),
     caption: str = Form(...),
     scheduled_time: str = Form(...),
-    platform: str = Form("twitter")
+    platform: str = Form("twitter"),
+    username: str = Depends(get_current_username),
 ):
-    """Schedule a social media post"""
+    """Schedule a social media post for the authenticated user."""
     try:
-        # Parse scheduled time
         scheduled_dt = datetime.fromisoformat(scheduled_time.replace('Z', '+00:00'))
-        
-        # Save to database
         post_id = save_scheduled_post(
             content_id=content_id,
-            conversation_id=conversation_id,
+            conversation_id=username,
             caption=caption,
             scheduled_time=scheduled_dt,
             platform=platform
@@ -705,9 +898,21 @@ async def schedule_post(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/scheduled-posts/me")
+async def get_my_scheduled_posts(username: str = Depends(get_current_username)):
+    """Get all scheduled posts for the authenticated user."""
+    try:
+        posts = get_scheduled_posts_by_conversation(username)
+        return {"posts": posts, "username": username}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/scheduled-posts/conversation/{conversation_id}")
-async def get_conversation_scheduled_posts(conversation_id: str):
-    """Get all scheduled posts for a conversation"""
+async def get_conversation_scheduled_posts(conversation_id: str, username: str = Depends(get_current_username)):
+    """Get scheduled posts for a conversation; only allowed for own username."""
+    if conversation_id != username:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         posts = get_scheduled_posts_by_conversation(conversation_id)
         return {"posts": posts, "conversation_id": conversation_id}

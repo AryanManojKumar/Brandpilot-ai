@@ -3,19 +3,22 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import { Send, Loader2, Video, Sparkles } from 'lucide-react'
+import { Send, Loader2, Video, Sparkles, LogOut } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
 
 interface Message {
   content: string
   isUser: boolean
 }
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
 export default function ChatInterface() {
   const router = useRouter()
-  const [conversationId, setConversationId] = useState('')
+  const { username, authHeader, logout } = useAuth()
   const [messages, setMessages] = useState<Message[]>([
     {
-      content: "👋 Hi! I'm your Brand Research Agent from IIT Gandhinagar Social Media Agent platform.\n\nTo get started, please share your website URL (e.g., nike.com, apple.com) and I'll analyze your brand identity, colors, target audience, and more!",
+      content: "👋 Hi! I'm GOJO, your guide for the IIT Gandhinagar Social Media Agent platform.\n\nTo get started, share your website URL (e.g., nike.com, apple.com) and I'll run our brand fetch tool to analyze your brand and save it. After that, you can use the Content Creation Dashboard for your brand info and to create content, and the Social Media Manager for your created assets and X analytics (when connected).",
       isUser: false,
     },
   ])
@@ -40,18 +43,11 @@ export default function ChatInterface() {
     setLoading(true)
 
     try {
-      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/chat`, {
+      const response = await axios.post(`${API_BASE}/chat`, {
         message: userMessage,
-        conversation_id: conversationId || undefined,
-      })
+      }, { headers: authHeader() })
 
       const agentResponse = response.data.response
-      
-      // Update conversation ID if returned from backend
-      if (response.data.conversation_id && !conversationId) {
-        setConversationId(response.data.conversation_id)
-      }
-      
       setMessages((prev) => [...prev, { content: agentResponse, isUser: false }])
     } catch (error) {
       setMessages((prev) => [
@@ -64,19 +60,11 @@ export default function ChatInterface() {
   }
 
   const openContentDashboard = () => {
-    if (!conversationId) {
-      alert('Please start a conversation first to sync brands!')
-      return
-    }
-    router.push(`/content-creator?conversation_id=${conversationId}`)
+    router.push('/content-creator')
   }
 
   const openSocialMediaManager = () => {
-    if (!conversationId) {
-      alert('Please start a conversation and generate content first!')
-      return
-    }
-    router.push(`/social-media-manager?conversation_id=${conversationId}`)
+    router.push('/social-media-manager')
   }
 
   return (
@@ -85,12 +73,20 @@ export default function ChatInterface() {
         {/* Chat Box */}
         <div className="flex-1 h-[85vh] bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden">
           {/* Header */}
-          <div className="gradient-bg text-white p-6">
-            <h2 className="text-2xl font-bold">🎨 Brand Research Agent</h2>
-            <p className="text-sm opacity-90 mt-1">IIT Gandhinagar Social Media Agent</p>
-            {conversationId && (
-              <p className="text-xs opacity-75 mt-2">Conversation ID: {conversationId}</p>
-            )}
+          <div className="gradient-bg text-white p-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold">GOJO</h2>
+              <p className="text-sm opacity-90 mt-1">IIT Gandhinagar Social Media Agent</p>
+              {username && (
+                <p className="text-xs opacity-75 mt-2">Logged in as {username}</p>
+              )}
+            </div>
+            <button
+              onClick={() => { logout(); router.replace('/login'); }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-sm"
+            >
+              <LogOut className="w-4 h-4" /> Logout
+            </button>
           </div>
 
         {/* Messages */}
@@ -109,16 +105,7 @@ export default function ChatInterface() {
         </div>
 
           {/* Input */}
-          <div className="p-6 border-t space-y-3">
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={conversationId}
-                onChange={(e) => setConversationId(e.target.value)}
-                placeholder="Conversation ID (optional)"
-                className="w-64 px-4 py-2 border-2 border-gray-200 rounded-full focus:outline-none focus:border-purple-500 transition-colors text-sm"
-              />
-            </div>
+          <div className="p-6 border-t">
             <div className="flex gap-3">
               <input
                 type="text"
@@ -142,13 +129,13 @@ export default function ChatInterface() {
 
         {/* Agents Sidebar */}
         <div className="w-80 space-y-4">
-          <AgentCard
+          {/* <AgentCard
             icon={<Sparkles className="w-6 h-6" />}
-            title="Brand Research Agent"
+            title="GOJO"
             description="Analyzes your brand identity, colors, and target audience"
             status="Active"
             color="purple"
-          />
+          /> */}
           <AgentCard
             icon={<Video className="w-6 h-6" />}
             title="Content Creation Dashboard"

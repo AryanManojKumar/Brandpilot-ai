@@ -2,6 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/contexts/AuthContext";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface XUserInsights {
   data?: {
@@ -70,12 +73,13 @@ interface GeneratedContent {
 }
 
 interface SocialMediaManagerDashboardProps {
-  conversationId: string;
+  username: string;
 }
 
 export default function SocialMediaManagerDashboard({
-  conversationId,
+  username,
 }: SocialMediaManagerDashboardProps) {
+  const { authHeader } = useAuth();
   const [content, setContent] = useState<GeneratedContent[]>([]);
   const [loading, setLoading] = useState(true);
   const [xConnected, setXConnected] = useState<boolean | null>(null);
@@ -89,23 +93,21 @@ export default function SocialMediaManagerDashboard({
 
   useEffect(() => {
     fetchGeneratedContent();
-  }, [conversationId]);
+  }, [username]);
 
-  // Restore saved X connection for this conversation so user doesn't need to re-login
   useEffect(() => {
-    if (!conversationId) return;
-    fetch(
-      `http://localhost:8000/twitter/connection?conversation_id=${encodeURIComponent(conversationId)}`
-    )
+    fetch(`${API_BASE}/twitter/connection`, { headers: authHeader() })
       .then((res) => res.json())
       .then((data) => {
         if (data.connected && data.username) {
           setXConnected(true);
           setXUsername(data.username);
+        } else {
+          setXConnected(false);
         }
       })
-      .catch(() => {});
-  }, [conversationId]);
+      .catch(() => setXConnected(false));
+  }, [username]);
 
   useEffect(() => {
     if (xConnected && xUsername) {
@@ -113,7 +115,7 @@ export default function SocialMediaManagerDashboard({
       setXInsights(null);
       setXTweets([]);
       fetch(
-        `http://localhost:8000/twitter/user-insights?username=${encodeURIComponent(xUsername)}`
+        `${API_BASE}/twitter/user-insights?username=${encodeURIComponent(xUsername)}`
       )
         .then((res) => res.json())
         .then((data) => {
@@ -139,7 +141,7 @@ export default function SocialMediaManagerDashboard({
     }
     setXTweetsLoading(true);
     fetch(
-      `http://localhost:8000/twitter/user-tweets?user_id=${encodeURIComponent(userId)}`
+      `${API_BASE}/twitter/user-tweets?user_id=${encodeURIComponent(userId)}`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -157,9 +159,9 @@ export default function SocialMediaManagerDashboard({
 
   const fetchGeneratedContent = async () => {
     try {
-      const response = await fetch(
-        `http://localhost:8000/generated-content/conversation/${conversationId}`
-      );
+      const response = await fetch(`${API_BASE}/generated-content/me`, {
+        headers: authHeader(),
+      });
       const data = await response.json();
       setContent(data.content || []);
     } catch (error) {
@@ -173,8 +175,9 @@ export default function SocialMediaManagerDashboard({
     setXConnecting(true);
     setXConnected(null);
     try {
-      const url = `http://localhost:8000/twitter/connect?conversation_id=${encodeURIComponent(conversationId)}`;
-      const response = await fetch(url);
+      const response = await fetch(`${API_BASE}/twitter/connect`, {
+        headers: authHeader(),
+      });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
         setXConnected(true);
@@ -192,8 +195,7 @@ export default function SocialMediaManagerDashboard({
   };
 
   const handlePostToX = (contentItem: GeneratedContent) => {
-    // Navigate to posting page with content ID
-    router.push(`/post-to-x?content_id=${contentItem.id}&conversation_id=${conversationId}`);
+    router.push(`/post-to-x?content_id=${contentItem.id}`);
   };
 
   // Group content by brand
@@ -335,9 +337,9 @@ export default function SocialMediaManagerDashboard({
                         </button>
                       </div>
                       <div className="absolute top-2 right-2">
-                        <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-semibold">
+                        {/* <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-semibold">
                           {item.status}
-                        </span>
+                        </span> */}
                       </div>
                     </div>
                   ))}

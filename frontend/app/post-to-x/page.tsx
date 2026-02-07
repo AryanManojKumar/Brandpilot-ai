@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -17,6 +19,7 @@ interface ContentData {
 export default function PostToXPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { authHeader, isAuthenticated, loading: authLoading } = useAuth();
   const [content, setContent] = useState<ContentData | null>(null);
   const [caption, setCaption] = useState("");
   const [generatingCaption, setGeneratingCaption] = useState(false);
@@ -34,21 +37,22 @@ export default function PostToXPage() {
   const TYPING_PHRASE = "Writing your caption... ";
 
   const contentId = searchParams.get("content_id");
-  const conversationId = searchParams.get("conversation_id");
   const isConnectedToX = xConnected === true;
 
   useEffect(() => {
-    if (contentId && conversationId) {
+    if (!authLoading && !isAuthenticated) router.replace("/login");
+  }, [authLoading, isAuthenticated, router]);
+
+  useEffect(() => {
+    if (contentId && isAuthenticated) {
       captionFetchedRef.current = false;
       fetchContentDetails();
     }
-  }, [contentId, conversationId]);
+  }, [contentId, isAuthenticated]);
 
   useEffect(() => {
-    if (!conversationId) return;
-    fetch(
-      `${API_BASE}/twitter/connection?conversation_id=${encodeURIComponent(conversationId)}`
-    )
+    if (!isAuthenticated) return;
+    fetch(`${API_BASE}/twitter/connection`, { headers: authHeader() })
       .then((res) => res.json())
       .then((data) => {
         if (data.connected && data.username) {
@@ -59,15 +63,16 @@ export default function PostToXPage() {
         }
       })
       .catch(() => setXConnected(false));
-  }, [conversationId]);
+  }, [isAuthenticated]);
 
   const fetchContentDetails = async () => {
+    if (!contentId) return;
     try {
-      const response = await fetch(
-        `${API_BASE}/generated-content/conversation/${conversationId}`
-      );
+      const response = await fetch(`${API_BASE}/generated-content/me`, {
+        headers: authHeader(),
+      });
       const data = await response.json();
-      const item = data.content?.find((c: any) => c.id === parseInt(contentId!, 10));
+      const item = data.content?.find((c: any) => c.id === parseInt(contentId, 10));
       if (item) {
         setContent(item);
       }
@@ -114,7 +119,7 @@ export default function PostToXPage() {
       }
     } catch (error) {
       console.error("Error generating caption:", error);
-      alert("Failed to generate caption");
+      toast.error("Failed to generate caption");
     } finally {
       setGeneratingCaption(false);
     }
@@ -144,12 +149,11 @@ export default function PostToXPage() {
   }, [content?.id, isConnectedToX]);
 
   const handleConnectX = async () => {
-    if (!conversationId) return;
     setXConnecting(true);
     try {
-      const response = await fetch(
-        `${API_BASE}/twitter/connect?conversation_id=${encodeURIComponent(conversationId)}`
-      );
+      const response = await fetch(`${API_BASE}/twitter/connect`, {
+        headers: authHeader(),
+      });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
         setXConnected(true);
@@ -162,46 +166,86 @@ export default function PostToXPage() {
     }
   };
 
+  const handlePostNow = async () => {
+    if (!content || !caption.trim()) {
+      toast.warning("Please add a caption first.");
+      return;
+    }
+    setPosting(true);
+    try {
+      const formData = new FormData();
+      formData.append("content_id", content.id.toString());
+      formData.append("caption", caption.trim());
+      const response = await fetch(`${API_BASE}/post-now`, {
+        method: "POST",
+        headers: authHeader(),
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) {
+        toast.success("Posted to X!", { description: data.post_url && "View your tweet", action: data.post_url ? { label: "Open", onClick: () => window.open(data.post_url) } : undefined });
+        router.push("/social-media-manager");
+      } else {
+        toast.error("Failed to post", { description: typeof data.detail === "string" ? data.detail : undefined });
+      }
+    } catch (error) {
+      console.error("Error posting:", error);
+      toast.error("Failed to post");
+    } finally {
+      setPosting(false);
+    }
+  };
+
   const handleScheduleTweet = async () => {
-    if (!content || !conversationId || !caption.trim()) {
-      alert("Please add a caption first.");
+    if (!content || !caption.trim()) {
+      toast.warning("Please add a caption first.");
       return;
     }
     if (!scheduleDate || !scheduleTime) {
-      alert("Please set the date and time for your post.");
+      toast.warning("Please set the date and time for your post.");
       return;
     }
     const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
     if (scheduledDateTime <= new Date()) {
-      alert("Please choose a future date and time.");
+      toast.warning("Please choose a future date and time.");
       return;
     }
     setScheduling(true);
     try {
       const formData = new FormData();
       formData.append("content_id", content.id.toString());
-      formData.append("conversation_id", conversationId);
       formData.append("caption", caption.trim());
       formData.append("scheduled_time", scheduledDateTime.toISOString());
       formData.append("platform", "twitter");
       const response = await fetch(`${API_BASE}/schedule-post`, {
         method: "POST",
+        headers: authHeader(),
         body: formData,
       });
       const data = await response.json();
       if (data.success) {
-        alert("Post scheduled successfully!");
-        router.push(`/social-media-manager?conversation_id=${conversationId}`);
+        toast.success("Post scheduled!", { description: "It will go live at the chosen time." });
+        router.push("/social-media-manager");
       } else {
-        alert(data.detail || "Failed to schedule post");
+        toast.error("Failed to schedule post", { description: typeof data.detail === "string" ? data.detail : undefined });
       }
     } catch (error) {
       console.error("Error scheduling post:", error);
-      alert("Failed to schedule post");
+      toast.error("Failed to schedule post");
     } finally {
       setScheduling(false);
     }
   };
+
+  if (authLoading || !contentId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-xl">
+          {authLoading ? "Loading…" : !contentId ? "Missing content_id" : "Loading..."}
+        </div>
+      </div>
+    );
+  }
 
   if (!content) {
     return (
@@ -292,8 +336,13 @@ export default function PostToXPage() {
                   ) : (
                     <textarea
                       value={caption}
-                      disabled
-                      className="w-full p-4 border-2 border-gray-300 rounded-lg resize-none bg-gray-100 text-gray-700 cursor-not-allowed opacity-90"
+                      onChange={(e) => setCaption(e.target.value.slice(0, 280))}
+                      disabled={!isConnectedToX}
+                      className={`w-full p-4 border-2 rounded-lg resize-none font-sans text-gray-700 ${
+                        isConnectedToX
+                          ? "border-gray-300 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          : "border-gray-300 bg-gray-100 cursor-not-allowed opacity-90"
+                      }`}
                       rows={6}
                       maxLength={280}
                       placeholder="Your caption will appear here..."
@@ -317,9 +366,14 @@ export default function PostToXPage() {
 
               {isConnectedToX ? (
                 <div className="border-t pt-4 mt-4 space-y-4">
-                  <p className="text-sm text-gray-600">
-                    Set when you want this post to go live. Image and caption above will be used.
-                  </p>
+                  <button
+                    onClick={handlePostNow}
+                    disabled={posting || scheduling || !caption.trim()}
+                    className="w-full bg-black text-white py-3 px-6 rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-semibold flex items-center justify-center gap-2"
+                  >
+                    {posting ? "Posting..." : "Post now to X"}
+                  </button>
+                  <p className="text-sm text-gray-600 text-center">— or schedule for later —</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
@@ -343,10 +397,10 @@ export default function PostToXPage() {
                   </div>
                   <button
                     onClick={handleScheduleTweet}
-                    disabled={scheduling || !caption.trim() || !scheduleDate || !scheduleTime}
+                    disabled={scheduling || posting || !caption.trim() || !scheduleDate || !scheduleTime}
                     className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-semibold flex items-center justify-center gap-2"
                   >
-                    {scheduling ? "Scheduling..." : "📅 Schedule tweet"}
+                    {scheduling ? "Scheduling..." : "Schedule tweet"}
                   </button>
                 </div>
               ) : (

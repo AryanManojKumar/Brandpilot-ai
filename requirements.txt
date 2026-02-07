@@ -14,3 +14,6 @@ sqlalchemy
 python-multipart
 Pillow
 tweepy>=4.14.0
+PyJWT>=2.8.0
+bcrypt>=4.0.0
+fastapi-sso>=0.6.0
