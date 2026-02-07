@@ -117,6 +117,18 @@ def setup_database():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Conversation X (Twitter) account link - one X account per conversation
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_x_accounts (
+                id SERIAL PRIMARY KEY,
+                conversation_id VARCHAR(255) UNIQUE NOT NULL REFERENCES conversations(conversation_id),
+                x_username VARCHAR(255) NOT NULL,
+                x_user_id VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         
         conn.commit()
         print("✅ Database tables created successfully!")
@@ -529,6 +541,54 @@ def get_scheduled_posts_by_conversation(conversation_id: str):
     except Exception as e:
         print(f"Error retrieving scheduled posts: {e}")
         return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def save_conversation_x_account(conversation_id: str, x_username: str, x_user_id: str = None):
+    """Link an X (Twitter) account to a conversation (upsert: one per conversation)."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            INSERT INTO conversation_x_accounts (conversation_id, x_username, x_user_id, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (conversation_id) DO UPDATE SET
+                x_username = EXCLUDED.x_username,
+                x_user_id = EXCLUDED.x_user_id,
+                updated_at = EXCLUDED.updated_at
+            RETURNING id
+        """, (conversation_id, x_username, x_user_id, datetime.now()))
+        conn.commit()
+        result = cur.fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error saving conversation X account: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_conversation_x_account(conversation_id: str):
+    """Get the X account linked to a conversation, if any."""
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    try:
+        cur.execute("""
+            SELECT x_username, x_user_id, created_at
+            FROM conversation_x_accounts
+            WHERE conversation_id = %s
+        """, (conversation_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"Error getting conversation X account: {e}")
+        return None
     finally:
         cur.close()
         conn.close()

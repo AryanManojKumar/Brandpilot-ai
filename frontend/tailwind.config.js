@@ -11,6 +11,15 @@ module.exports = {
         primary: '#667eea',
         secondary: '#764ba2',
       },
+      keyframes: {
+        blink: {
+          '0%, 50%': { opacity: '1' },
+          '51%, 100%': { opacity: '0' },
+        },
+      },
+      animation: {
+        'cursor-blink': 'blink 1s step-end infinite',
+      },
     },
   },
   plugins: [],

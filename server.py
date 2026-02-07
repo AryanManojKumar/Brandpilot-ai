@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import uvicorn
 import json
 import re
-from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation
+from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation, save_conversation_x_account, get_conversation_x_account
 from image_generator import generate_marketing_prompt, generate_ugc_image_nano_banana, upload_to_tmpfiles
 from twitter_utils import generate_caption_with_ai, post_to_twitter
 from fastapi import UploadFile, File, Form
@@ -522,6 +522,150 @@ async def generate_caption(
         import traceback
         print(f"Error generating caption: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/twitter/connect")
+async def twitter_connect(conversation_id: str = None):
+    """Verify X (Twitter) connection and optionally link it to a conversation for persistence."""
+    import tweepy
+
+    api_key = os.getenv("TWITTER_API_KEY")
+    api_secret = os.getenv("TWITTER_API_SECRET")
+    access_token = os.getenv("TWITTER_ACCESS_TOKEN")
+    access_token_secret = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+
+    if not all([api_key, api_secret, access_token, access_token_secret]):
+        raise HTTPException(
+            status_code=500,
+            detail="Twitter credentials not configured (missing TWITTER_* in .env)",
+        )
+
+    try:
+        auth = tweepy.OAuth1UserHandler(
+            api_key, api_secret, access_token, access_token_secret
+        )
+        api = tweepy.API(auth)
+        user = api.verify_credentials()
+        username = user.screen_name
+        name = getattr(user, "name", user.screen_name)
+        x_user_id = str(user.id) if getattr(user, "id", None) else None
+
+        if conversation_id and conversation_id.strip():
+            create_conversation(conversation_id.strip())
+            save_conversation_x_account(conversation_id.strip(), username, x_user_id)
+
+        return {
+            "success": True,
+            "username": username,
+            "name": name,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@app.get("/twitter/connection")
+async def twitter_connection(conversation_id: str):
+    """Return the X account linked to this conversation (if any) so the frontend can restore state."""
+    if not conversation_id or not conversation_id.strip():
+        return {"connected": False}
+    try:
+        row = get_conversation_x_account(conversation_id.strip())
+        if not row or not row.get("x_username"):
+            return {"connected": False}
+        return {
+            "connected": True,
+            "username": row["x_username"],
+            "user_id": row.get("x_user_id"),
+        }
+    except Exception as e:
+        return {"connected": False}
+
+
+@app.get("/twitter/user-insights")
+async def twitter_user_insights(username: str):
+    """Fetch X user profile and stats from TweetAPI for the connected user"""
+    import requests as req
+
+    api_key = os.getenv("TWEETAPI")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="TWEETAPI not configured in .env",
+        )
+
+    if not username or not username.strip():
+        raise HTTPException(status_code=400, detail="username is required")
+
+    username = username.strip().lstrip("@")
+
+    try:
+        r = req.get(
+            "https://api.tweetapi.com/tw-v2/user/by-username",
+            params={"username": username},
+            headers={"X-API-Key": api_key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data
+    except req.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            err_body = e.response.json()
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=err_body.get("message", err_body.get("error", e.response.text)),
+            )
+        except Exception:
+            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except req.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"TweetAPI error: {str(e)}")
+
+
+@app.get("/twitter/user-tweets")
+async def twitter_user_tweets(user_id: str):
+    """Fetch recent tweets by user from TweetAPI (tw-v2/user/tweets)."""
+    import requests as req
+
+    api_key = os.getenv("TWEETAPI")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="TWEETAPI not configured in .env",
+        )
+
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    user_id = user_id.strip()
+
+    try:
+        r = req.get(
+            "https://api.tweetapi.com/tw-v2/user/tweets",
+            params={"userId": user_id},
+            headers={"X-API-Key": api_key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data
+    except req.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            err_body = e.response.json()
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=err_body.get("message", err_body.get("error", e.response.text)),
+            )
+        except Exception:
+            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except req.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"TweetAPI error: {str(e)}")
 
 
 @app.post("/schedule-post")
