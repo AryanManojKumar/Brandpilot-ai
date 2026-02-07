@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -70,6 +70,7 @@ interface GeneratedContent {
   prompt_used: string;
   created_at: string;
   status: string;
+  content_type: string; // 'ugc_image' or 'ugc_video'
 }
 
 interface SocialMediaManagerDashboardProps {
@@ -224,27 +225,38 @@ export default function SocialMediaManagerDashboard({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen p-8" style={{ backgroundColor: '#f7f7f4' }}>
       <div className="max-w-7xl mx-auto">
         <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">
-              Social Media Manager
-            </h1>
-            <p className="text-gray-600">
-              Manage and schedule your generated marketing content
-            </p>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push("/")}
+              className="p-2 bg-white border border-[#deddd6] hover:border-[#26251e] rounded-lg transition-colors"
+              title="Go to Home"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-[#26251e]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+              </svg>
+            </button>
+            <div>
+              <h1 className="text-3xl font-semibold text-[#26251e] mb-1">
+                Social Media Manager
+              </h1>
+              <p className="text-[#5c5a52]">
+                Manage and schedule your generated marketing content
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {xConnected === true ? (
-              <span className="inline-flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-lg font-medium">
+              <span className="inline-flex items-center gap-2 bg-[#efefe9] text-[#26251e] px-4 py-2 rounded-lg font-medium border border-[#deddd6]">
                 <span>✓</span> Connected to X @{xUsername || "X"}
               </span>
             ) : (
               <button
                 onClick={handleConnectX}
                 disabled={xConnecting}
-                className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                className="inline-flex items-center gap-2 bg-[#26251e] text-white px-4 py-2 rounded-lg font-medium hover:bg-[#3d3c33] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {xConnecting ? (
                   "Connecting..."
@@ -265,16 +277,16 @@ export default function SocialMediaManagerDashboard({
         {xConnected && xUsername && (
           <section className="mb-10">
             {xInsightsLoading ? (
-              <div className="bg-white rounded-2xl shadow-lg p-8 flex items-center justify-center min-h-[280px]">
+              <div className="bg-white rounded-xl border border-[#deddd6] p-8 flex items-center justify-center min-h-[200px]">
                 <div className="text-center">
-                  <div className="inline-block w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
-                  <p className="text-gray-600 font-medium">Loading your X analytics...</p>
+                  <div className="inline-block w-8 h-8 border-2 border-[#26251e] border-t-transparent rounded-full animate-spin mb-3" />
+                  <p className="text-[#5c5a52] font-medium">Loading your X analytics...</p>
                 </div>
               </div>
             ) : xInsights?.data ? (
               <XAnalyticsSection insights={xInsights} recentTweets={xTweets.slice(0, 2)} tweetsLoading={xTweetsLoading} />
             ) : xInsights && !xInsights.data ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-800 text-sm">
+              <div className="bg-[#fef8e8] border border-[#e5d9a8] rounded-xl p-4 text-[#8a7a3a] text-sm">
                 Could not load analytics for @{xUsername}. Check TWEETAPI key in .env.
               </div>
             ) : null}
@@ -283,34 +295,34 @@ export default function SocialMediaManagerDashboard({
 
         {Object.keys(contentByBrand).length === 0 ? (
           <div className="text-center py-12">
-            <p className="text-gray-500 text-lg">
+            <p className="text-[#5c5a52] text-base">
               No content generated yet. Create some marketing images first!
             </p>
           </div>
         ) : (
           <div className="space-y-8">
             {Object.values(contentByBrand).map((brandGroup: any) => (
-              <div key={brandGroup.brand_id} className="bg-white rounded-lg shadow-md p-6">
+              <div key={brandGroup.brand_id} className="bg-white rounded-xl border border-[#deddd6] p-6">
                 {/* Brand Header */}
-                <div className="flex items-center mb-6 pb-4 border-b">
+                <div className="flex items-center mb-6 pb-4 border-b border-[#deddd6]">
                   {brandGroup.logo_url && (
                     <img
                       src={brandGroup.logo_url}
                       alt={brandGroup.brand_name}
-                      className="w-12 h-12 object-contain mr-4 bg-gray-50 rounded-lg p-2"
+                      className="w-10 h-10 object-contain mr-4 bg-[#f7f7f4] rounded-lg p-1 border border-[#deddd6]"
                       onError={(e) => {
                         e.currentTarget.style.display = "none";
                       }}
                     />
                   )}
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">
+                    <h2 className="text-xl font-semibold text-[#26251e]">
                       {brandGroup.brand_name}
                     </h2>
-                    <p className="text-sm text-gray-500">{brandGroup.industry}</p>
+                    <p className="text-sm text-[#5c5a52]">{brandGroup.industry}</p>
                   </div>
                   <div className="ml-auto">
-                    <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-semibold">
+                    <span className="bg-[#efefe9] text-[#26251e] px-3 py-1 rounded-full text-sm font-medium border border-[#deddd6]">
                       {brandGroup.items.length} {brandGroup.items.length === 1 ? 'Asset' : 'Assets'}
                     </span>
                   </div>
@@ -319,29 +331,32 @@ export default function SocialMediaManagerDashboard({
                 {/* Content Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {brandGroup.items.map((item: GeneratedContent) => (
-                    <div
-                      key={item.id}
-                      className="relative group rounded-lg overflow-hidden shadow-md hover:shadow-xl transition-shadow"
-                    >
-                      <img
-                        src={item.generated_image_url}
-                        alt="Generated content"
-                        className="w-full h-64 object-cover"
+                    item.content_type === 'ugc_video' ? (
+                      <VideoCard
+                        key={item.id}
+                        item={item}
+                        onPostToX={() => handlePostToX(item)}
                       />
-                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-60 transition-all flex items-center justify-center">
-                        <button
-                          onClick={() => handlePostToX(item)}
-                          className="opacity-0 group-hover:opacity-100 bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold transition-opacity hover:bg-blue-600 flex items-center gap-2"
-                        >
-                          <span>🐦</span> Post to X
-                        </button>
+                    ) : (
+                      <div
+                        key={item.id}
+                        className="relative group rounded-xl overflow-hidden border border-[#deddd6] hover:border-[#26251e] transition-all"
+                      >
+                        <img
+                          src={item.generated_image_url}
+                          alt="Generated content"
+                          className="w-full h-80 object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all flex items-center justify-center">
+                          <button
+                            onClick={() => handlePostToX(item)}
+                            className="opacity-0 group-hover:opacity-100 bg-white text-[#26251e] px-5 py-2.5 rounded-lg font-medium transition-opacity hover:bg-[#f7f7f4] flex items-center gap-2 border border-[#deddd6]"
+                          >
+                            <span>🐦</span> Post to X
+                          </button>
+                        </div>
                       </div>
-                      <div className="absolute top-2 right-2">
-                        {/* <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-semibold">
-                          {item.status}
-                        </span> */}
-                      </div>
-                    </div>
+                    )
                   ))}
                 </div>
               </div>
@@ -494,6 +509,199 @@ function XAnalyticsSection({
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// VideoCard component with Intersection Observer for auto play/pause
+function VideoCard({
+  item,
+  onPostToX,
+}: {
+  item: GeneratedContent;
+  onPostToX: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  // Intersection Observer for auto play/pause when scrolling
+  useEffect(() => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            // Video is at least 50% visible - auto play
+            video.play().catch(() => { });
+            setIsPlaying(true);
+          } else {
+            // Video is less than 50% visible - pause
+            video.pause();
+            setIsPlaying(false);
+          }
+        });
+      },
+      {
+        threshold: [0, 0.25, 0.5, 0.75, 1],
+        rootMargin: "0px",
+      }
+    );
+
+    observer.observe(container);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // Update progress bar
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const updateProgress = () => {
+      if (video.duration) {
+        setProgress((video.currentTime / video.duration) * 100);
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      setDuration(video.duration);
+    };
+
+    video.addEventListener("timeupdate", updateProgress);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+    return () => {
+      video.removeEventListener("timeupdate", updateProgress);
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+    };
+  }, []);
+
+  const togglePlayPause = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.paused) {
+      video.play().catch(() => { });
+      setIsPlaying(true);
+    } else {
+      video.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const video = videoRef.current;
+    if (!video) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    video.currentTime = percentage * video.duration;
+  };
+
+  const formatTime = (time: number) => {
+    const mins = Math.floor(time / 60);
+    const secs = Math.floor(time % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative group rounded-lg overflow-hidden shadow-md hover:shadow-xl transition-shadow bg-black"
+    >
+      {/* Video */}
+      <video
+        ref={videoRef}
+        src={item.generated_image_url}
+        className="w-full h-80 object-cover"
+        muted
+        loop
+        playsInline
+        poster=""
+      />
+
+      {/* Video Controls Overlay */}
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3">
+        {/* Progress Bar */}
+        <div
+          className="w-full h-1.5 bg-white/30 rounded-full cursor-pointer mb-2 group/progress"
+          onClick={handleProgressClick}
+        >
+          <div
+            className="h-full bg-purple-500 rounded-full relative transition-all"
+            style={{ width: `${progress}%` }}
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover/progress:opacity-100 transition-opacity" />
+          </div>
+        </div>
+
+        {/* Controls Row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {/* Play/Pause Button */}
+            <button
+              onClick={togglePlayPause}
+              className="w-8 h-8 flex items-center justify-center bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+            >
+              {isPlaying ? (
+                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+            </button>
+
+            {/* Time Display */}
+            <span className="text-white/90 text-xs font-medium tabular-nums">
+              {formatTime((progress / 100) * duration)} / {formatTime(duration)}
+            </span>
+          </div>
+
+          {/* Video Badge */}
+          <div className="bg-purple-600 text-white px-2 py-1 rounded text-xs font-semibold flex items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Video
+          </div>
+        </div>
+      </div>
+
+      {/* Center Play Button (when paused) */}
+      {!isPlaying && (
+        <button
+          onClick={togglePlayPause}
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 flex items-center justify-center bg-black/50 hover:bg-black/70 rounded-full transition-colors"
+        >
+          <svg className="w-8 h-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        </button>
+      )}
+
+      {/* Hover Overlay for Post Button */}
+      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all flex items-center justify-center pointer-events-none">
+        <button
+          onClick={onPostToX}
+          className="opacity-0 group-hover:opacity-100 bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold transition-opacity hover:bg-blue-600 flex items-center gap-2 pointer-events-auto"
+        >
+          <span>🐦</span> Post to X
+        </button>
       </div>
     </div>
   );

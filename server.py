@@ -15,8 +15,9 @@ import jwt
 import bcrypt
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
-from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation, get_due_scheduled_posts, update_scheduled_post_after_publish, save_conversation_x_account, get_conversation_x_account, create_user, get_user_by_username
+from database import save_brand, create_conversation, save_message, get_brand_by_domain, get_brands_by_conversation, get_all_brands, save_generated_content, get_generated_content_by_brand, get_generated_content_by_conversation, save_scheduled_post, get_scheduled_posts_by_conversation, get_due_scheduled_posts, update_scheduled_post_after_publish, save_conversation_x_account, get_conversation_x_account, create_user, get_user_by_username, save_video_generation_task, get_video_task_id, update_video_generation_status
 from image_generator import generate_marketing_prompt, generate_ugc_image_nano_banana, upload_to_tmpfiles
+from video_generator import start_video_generation, check_video_status
 from twitter_utils import generate_caption_with_ai, post_to_twitter
 from fastapi import UploadFile, File, Form
 from datetime import datetime
@@ -67,7 +68,11 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -605,6 +610,173 @@ async def generate_ugc_content(
         import traceback
         error_trace = traceback.format_exc()
         print(f"❌ Error generating UGC: {error_trace}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/generate-video")
+async def generate_video_content(
+    brand_id: int = Form(...),
+    product_image: UploadFile = File(...),
+    model: str = Form("veo3_fast"),  # veo3 or veo3_fast
+    aspect_ratio: str = Form("9:16"),  # 16:9, 9:16, or Auto
+    username: str = Depends(get_current_username),
+):
+    """Start video generation for a brand using Veo 3.1 API"""
+    try:
+        # Get brand details
+        from database import get_connection
+        from psycopg2.extras import RealDictCursor
+        
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            SELECT b.*,
+                   COALESCE(array_agg(DISTINCT jsonb_build_object('name', bc.color_name, 'hex', bc.color_hex)) 
+                   FILTER (WHERE bc.id IS NOT NULL), '{}') as colors
+            FROM brands b
+            LEFT JOIN brand_colors bc ON b.id = bc.brand_id
+            WHERE b.id = %s
+            GROUP BY b.id
+        """, (brand_id,))
+        
+        brand = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not brand:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        brand_data = dict(brand)
+        
+        # Save uploaded product image
+        import shutil
+        import uuid
+        
+        file_extension = product_image.filename.split('.')[-1]
+        unique_filename = f"video_{brand_id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+        file_path = UPLOAD_DIR / unique_filename
+        
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(product_image.file, buffer)
+        
+        print(f"💾 Product image saved locally: {file_path}")
+        
+        # Upload to tmpfiles.org to get public URL
+        product_image_url = upload_to_tmpfiles(str(file_path))
+        
+        # Start video generation (async - returns task ID immediately)
+        print(f"🎬 Starting video generation for {brand_data['brand_name']}...")
+        
+        result = start_video_generation(product_image_url, brand_data, model, aspect_ratio)
+        
+        if not result['success']:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Video generation failed'))
+        
+        # Save to database with status='generating'
+        content_id = save_video_generation_task(
+            brand_id=brand_id,
+            conversation_id=username,
+            product_image_url=product_image_url,
+            prompt_used=result['prompt'],
+            video_task_id=result['task_id']
+        )
+        
+        if not content_id:
+            raise HTTPException(status_code=500, detail="Failed to save video task to database")
+        
+        print(f"✅ Video task saved to database! Content ID: {content_id}, Task ID: {result['task_id']}")
+        
+        return {
+            "success": True,
+            "content_id": content_id,
+            "task_id": result['task_id'],
+            "product_image_url": product_image_url,
+            "prompt": result['prompt'],
+            "message": "Video generation started. Poll /video-status/{content_id} for updates."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error starting video generation: {error_trace}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/video-status/{content_id}")
+async def get_video_status(
+    content_id: int,
+    username: str = Depends(get_current_username),
+):
+    """Check the status of a video generation task"""
+    try:
+        # Get task info from database
+        task_info = get_video_task_id(content_id)
+        
+        if not task_info:
+            raise HTTPException(status_code=404, detail="Video task not found")
+        
+        # Verify ownership
+        if task_info['conversation_id'] != username:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # If already completed or failed, return cached result
+        if task_info['status'] == 'completed' and task_info['video_url']:
+            return {
+                "status": "completed",
+                "video_url": task_info['video_url'],
+                "content_id": content_id
+            }
+        elif task_info['status'] == 'failed':
+            return {
+                "status": "failed",
+                "error": "Video generation failed",
+                "content_id": content_id
+            }
+        
+        # Otherwise, check with Veo API
+        video_task_id = task_info['video_task_id']
+        if not video_task_id:
+            raise HTTPException(status_code=500, detail="Missing video task ID")
+        
+        status_result = check_video_status(video_task_id)
+        
+        if status_result['status'] == 'completed':
+            # Update database with video URL
+            video_url = status_result.get('video_url')
+            update_video_generation_status(content_id, 'completed', video_url)
+            
+            return {
+                "status": "completed",
+                "video_url": video_url,
+                "resolution": status_result.get('resolution', 'unknown'),
+                "content_id": content_id
+            }
+        elif status_result['status'] == 'failed':
+            # Update database with failed status
+            update_video_generation_status(content_id, 'failed')
+            
+            return {
+                "status": "failed",
+                "error": status_result.get('error', 'Video generation failed'),
+                "content_id": content_id
+            }
+        else:
+            # Still generating
+            return {
+                "status": "generating",
+                "message": "Video is still being generated. Please check again in 15-30 seconds.",
+                "content_id": content_id
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error checking video status: {error_trace}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

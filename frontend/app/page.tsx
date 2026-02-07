@@ -17,15 +17,15 @@ export default function Home() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
-        <div className="text-gray-600">Loading…</div>
+      <main className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#f7f7f4' }}>
+        <div className="text-[#5c5a52]">Loading…</div>
       </main>
     )
   }
   if (!isAuthenticated) return null
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+    <main className="min-h-screen" style={{ backgroundColor: '#f7f7f4' }}>
       <ChatInterface />
     </main>
   )

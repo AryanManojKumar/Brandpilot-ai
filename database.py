@@ -692,7 +692,114 @@ def get_user_by_username(username: str):
         conn.close()
 
 
+def save_video_generation_task(brand_id: int, conversation_id: str, product_image_url: str,
+                                prompt_used: str, video_task_id: str):
+    """Save a video generation task to database with status='generating'."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Store video_task_id in a metadata field (we'll use prompt_used to store both prompt and task_id as JSON)
+        metadata = json.dumps({
+            'prompt': prompt_used,
+            'video_task_id': video_task_id
+        })
+        
+        cur.execute("""
+            INSERT INTO generated_content 
+            (brand_id, conversation_id, content_type, product_image_url, 
+             generated_image_url, prompt_used, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            brand_id, conversation_id, 'ugc_video', product_image_url,
+            None, metadata, 'generating',
+            datetime.now(), datetime.now()
+        ))
+        
+        conn.commit()
+        result = cur.fetchone()
+        return result[0] if result else None
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"Error saving video generation task: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_video_task_id(content_id: int):
+    """Get the video task ID for a content entry."""
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        cur.execute("""
+            SELECT prompt_used, status, generated_image_url, conversation_id
+            FROM generated_content 
+            WHERE id = %s AND content_type = 'ugc_video'
+        """, (content_id,))
+        
+        row = cur.fetchone()
+        if not row:
+            return None
+            
+        # Parse metadata from prompt_used
+        try:
+            metadata = json.loads(row['prompt_used'])
+            return {
+                'video_task_id': metadata.get('video_task_id'),
+                'prompt': metadata.get('prompt'),
+                'status': row['status'],
+                'video_url': row['generated_image_url'],  # We reuse this field for video URL
+                'conversation_id': row['conversation_id']
+            }
+        except (json.JSONDecodeError, TypeError):
+            return None
+        
+    except Exception as e:
+        print(f"Error getting video task ID: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_video_generation_status(content_id: int, status: str, video_url: str = None):
+    """Update the status of a video generation task."""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    try:
+        if video_url:
+            cur.execute("""
+                UPDATE generated_content 
+                SET status = %s, generated_image_url = %s, updated_at = %s
+                WHERE id = %s AND content_type = 'ugc_video'
+            """, (status, video_url, datetime.now(), content_id))
+        else:
+            cur.execute("""
+                UPDATE generated_content 
+                SET status = %s, updated_at = %s
+                WHERE id = %s AND content_type = 'ugc_video'
+            """, (status, datetime.now(), content_id))
+        
+        conn.commit()
+        return True
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating video generation status: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
 if __name__ == "__main__":
     print("Setting up BrandSync database...")
     setup_database()
     print("Database setup complete!")
+

@@ -33,13 +33,13 @@ export default function SignupPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
-        <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Sign up</h1>
-        <p className="text-center text-gray-600 text-sm mb-6">Brandpilot AI</p>
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <main className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: '#f7f7f4' }}>
+      <div className="w-full max-w-md bg-white rounded-2xl border border-[#deddd6] p-8">
+        <h1 className="text-2xl font-semibold text-center text-[#26251e] mb-2">Sign up</h1>
+        <p className="text-center text-[#5c5a52] text-sm mb-8">Brandpilot AI</p>
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="username" className="block text-sm font-medium text-[#26251e] mb-2">
               Username
             </label>
             <input
@@ -47,7 +47,7 @@ export default function SignupPage() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-purple-500"
+              className="w-full px-4 py-3 border border-[#deddd6] rounded-lg focus:outline-none focus:border-[#26251e] focus:ring-1 focus:ring-[#26251e] transition-all text-[#26251e] placeholder:text-[#8a887e]"
               placeholder="Choose a username"
               required
               minLength={2}
@@ -55,7 +55,7 @@ export default function SignupPage() {
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-[#26251e] mb-2">
               Password
             </label>
             <input
@@ -63,26 +63,26 @@ export default function SignupPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-purple-500"
+              className="w-full px-4 py-3 border border-[#deddd6] rounded-lg focus:outline-none focus:border-[#26251e] focus:ring-1 focus:ring-[#26251e] transition-all text-[#26251e] placeholder:text-[#8a887e]"
               placeholder="Choose a password"
               required
               autoComplete="new-password"
             />
           </div>
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
+            <p className="text-sm text-red-600 bg-red-50 px-4 py-3 rounded-lg border border-red-100">{error}</p>
           )}
           <button
             type="submit"
             disabled={loading}
-            className="w-full gradient-bg text-white py-3 rounded-lg font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+            className="w-full bg-[#26251e] text-white py-3 rounded-lg font-medium hover:bg-[#3d3c33] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? "Creating account…" : "Sign up"}
           </button>
         </form>
-        <p className="mt-6 text-center text-gray-600 text-sm">
+        <p className="mt-8 text-center text-[#5c5a52] text-sm">
           Already have an account?{" "}
-          <Link href="/login" className="text-purple-600 font-medium hover:underline">
+          <Link href="/login" className="text-[#26251e] font-medium hover:underline">
             Login
           </Link>
         </p>
