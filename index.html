@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brand Research Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 800px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f7f7f7;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 18px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.agent .message-content {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .input-container {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+        }
+
+        #messageInput {
+            flex: 1;
+            padding: 12px 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #messageInput:focus {
+            border-color: #667eea;
+        }
+
+        #sendButton {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #sendButton:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #sendButton:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: flex;
+            gap: 5px;
+            padding: 10px;
+        }
+
+        .loading span {
+            width: 8px;
+            height: 8px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .loading span:nth-child(1) { animation-delay: -0.32s; }
+        .loading span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        .welcome-message {
+            text-align: center;
+            color: #666;
+            padding: 40px 20px;
+        }
+
+        .welcome-message h2 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Brand Research Agent</h1>
+            <p>Powered by Brandfetch & Gemini AI</p>
+        </div>
+        
+        <div class="chat-container" id="chatContainer">
+            <div class="welcome-message">
+                <h2>Welcome!</h2>
+                <p>Ask me to fetch brand information for any company.</p>
+                <p>You can provide a website domain, stock ticker, ISIN, or crypto symbol.</p>
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <input 
+                type="text" 
+                id="messageInput" 
+                placeholder="Ask about a brand... (e.g., 'Get info for nike.com')"
+                autocomplete="off"
+            >
+            <button id="sendButton">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+
+        function addMessage(content, isUser) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'agent'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            if (isUser) {
+                contentDiv.textContent = content;
+            } else {
+                contentDiv.innerHTML = formatResponse(content);
+            }
+            
+            messageDiv.appendChild(contentDiv);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function formatResponse(text) {
+            // Convert markdown-style links to HTML
+            text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color: #667eea; text-decoration: none;">$1</a>');
+            
+            // Check if response contains brand data (has URLs or color codes)
+            const hasImages = text.includes('cdn.brandfetch.io');
+            const hasColors = text.includes('#');
+            
+            if (hasImages || hasColors) {
+                return formatBrandData(text);
+            }
+            
+            // For regular text, convert line breaks and format lists
+            text = text.replace(/\n/g, '<br>');
+            text = text.replace(/\* /g, '<br>• ');
+            
+            return text;
+        }
+
+        function formatBrandData(text) {
+            let html = '<div style="line-height: 1.8;">';
+            
+            // Extract brand name
+            const nameMatch = text.match(/\*\*Brand Name[:\*]*\s*([^\n*]+)/i) || text.match(/\*\*Name[:\*]*\s*([^\n*]+)/i);
+            
+            // Extract logo URL
+            const logoMatch = text.match(/\*\*Logo URL[:\*]*\s*(https:\/\/cdn\.brandfetch\.io[^\s\n*]+)/i);
+            const logoUrls = text.match(/https:\/\/cdn\.brandfetch\.io[^\s)]+/g);
+            
+            // Display brand header with logo
+            if (nameMatch || logoMatch || logoUrls) {
+                html += '<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 15px; color: white; display: flex; align-items: center; gap: 15px;">';
+                
+                if (logoMatch || (logoUrls && logoUrls.length > 0)) {
+                    const logoUrl = logoMatch ? logoMatch[1] : logoUrls[0];
+                    html += `<img src="${logoUrl}" alt="Logo" style="max-width: 60px; max-height: 60px; background: white; padding: 8px; border-radius: 10px;" onerror="this.style.display='none'">`;
+                }
+                
+                if (nameMatch) {
+                    html += `<div><h3 style="margin: 0; font-size: 20px;">${nameMatch[1]}</h3></div>`;
+                }
+                
+                html += '</div>';
+            }
+            
+            // Extract and display Product/Service
+            const productMatch = text.match(/\*\*Product\/Service[:\*]*\s*([^\n*]+)/i);
+            if (productMatch) {
+                html += `<div style="background: #f8f9fa; padding: 12px 15px; border-radius: 10px; margin-bottom: 12px; border-left: 4px solid #667eea;">
+                    <strong style="color: #667eea;">📦 Product/Service:</strong><br>
+                    <span style="color: #555; margin-top: 5px; display: block;">${productMatch[1]}</span>
+                </div>`;
+            }
+            
+            // Extract and display Company Vibe
+            const vibeMatch = text.match(/\*\*Company Vibe[:\*]*\s*([^\n*]+)/i);
+            if (vibeMatch) {
+                html += `<div style="background: #fff3cd; padding: 12px 15px; border-radius: 10px; margin-bottom: 12px; border-left: 4px solid #ffc107;">
+                    <strong style="color: #856404;">✨ Company Vibe:</strong><br>
+                    <span style="color: #555; margin-top: 5px; display: block;">${vibeMatch[1]}</span>
+                </div>`;
+            }
+            
+            // Extract and display Target Audience
+            const audienceMatch = text.match(/\*\*Target Audience[:\*]*\s*([^\n*]+)/i);
+            if (audienceMatch) {
+                html += `<div style="background: #d1ecf1; padding: 12px 15px; border-radius: 10px; margin-bottom: 12px; border-left: 4px solid #17a2b8;">
+                    <strong style="color: #0c5460;">👥 Target Audience:</strong><br>
+                    <span style="color: #555; margin-top: 5px; display: block;">${audienceMatch[1]}</span>
+                </div>`;
+            }
+            
+            // Extract and display Industry
+            const industryMatch = text.match(/\*\*Industry[:\*]*\s*([^\n*]+)/i);
+            if (industryMatch) {
+                html += `<div style="background: #d4edda; padding: 12px 15px; border-radius: 10px; margin-bottom: 12px; border-left: 4px solid #28a745;">
+                    <strong style="color: #155724;">🏢 Industry:</strong><br>
+                    <span style="color: #555; margin-top: 5px; display: block;">${industryMatch[1]}</span>
+                </div>`;
+            }
+            
+            // Extract and display colors
+            const colorMatches = text.match(/\* (Dark|Light|Accent|Primary|Secondary):\s*(#[0-9a-fA-F]{6})/g);
+            if (colorMatches) {
+                html += '<div style="margin: 15px 0;"><strong style="color: #333;">🎨 Brand Colors:</strong><br>';
+                html += '<div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">';
+                
+                colorMatches.forEach(match => {
+                    const [, label, color] = match.match(/\* ([^:]+):\s*(#[0-9a-fA-F]{6})/);
+                    html += `
+                        <div style="text-align: center;">
+                            <div style="width: 60px; height: 60px; background: ${color}; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 5px;"></div>
+                            <div style="font-size: 11px; color: #666;">${label}</div>
+                            <div style="font-size: 10px; color: #999; font-family: monospace;">${color}</div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div></div>';
+            }
+            
+            // Extract and display social links
+            const socialUrls = text.match(/https:\/\/(twitter|instagram|facebook|youtube|linkedin)\.com[^\s)]+/g);
+            if (socialUrls) {
+                html += '<div style="margin: 15px 0;"><strong style="color: #333;">🔗 Social Media:</strong><br>';
+                html += '<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">';
+                
+                socialUrls.forEach(url => {
+                    const platform = url.match(/(twitter|instagram|facebook|youtube|linkedin)/)[1];
+                    const icons = {
+                        twitter: '🐦',
+                        instagram: '📷',
+                        facebook: '👥',
+                        youtube: '▶️',
+                        linkedin: '💼'
+                    };
+                    
+                    html += `<a href="${url}" target="_blank" style="background: #667eea; color: white; padding: 6px 12px; border-radius: 15px; text-decoration: none; font-size: 12px; display: inline-flex; align-items: center; gap: 5px;">${icons[platform]} ${platform.charAt(0).toUpperCase() + platform.slice(1)}</a>`;
+                });
+                
+                html += '</div></div>';
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        function addLoadingIndicator() {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message agent';
+            messageDiv.id = 'loadingIndicator';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = '<div class="loading"><span></span><span></span><span></span></div>';
+            
+            messageDiv.appendChild(contentDiv);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function removeLoadingIndicator() {
+            const loading = document.getElementById('loadingIndicator');
+            if (loading) loading.remove();
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, true);
+            messageInput.value = '';
+            sendButton.disabled = true;
+            addLoadingIndicator();
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message })
+                });
+
+                const data = await response.json();
+                removeLoadingIndicator();
+                
+                if (response.ok) {
+                    addMessage(data.response, false);
+                } else {
+                    addMessage(`Error: ${data.detail}`, false);
+                }
+            } catch (error) {
+                removeLoadingIndicator();
+                addMessage('Sorry, something went wrong. Please try again.', false);
+            } finally {
+                sendButton.disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        messageInput.focus();
+    </script>
+</body>
+</html>
